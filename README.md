@@ -46,7 +46,8 @@ A comprehensive dashboard for managing and monitoring 5G network slices, built w
 
 1. **Start the server**
    ```bash
-$env:FLASK_APP="main.py"; $env:FLASK_ENV="development"; python -m flask run --port 8050 --debug   ```
+$env:FLASK_APP="main.py"; $env:FLASK_ENV="development"; python -m flask run --port 8050 --debug
+    ```
 
 2. **Access the application**
    - Dashboard: http://127.0.0.1:8050/dashboard
