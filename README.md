@@ -1,16 +1,29 @@
 # 5G Network Slice Manager
 
-A comprehensive web-based dashboard for managing and monitoring 5G network slices with real-time analytics and alerting.
+A comprehensive platform for managing 5G network slices with real-time monitoring, analytics, and multi-tenant portal access. The system includes a sophisticated 5G simulation environment using ns-3 with mmWave modules for realistic network behavior modeling.
 
-## 🌟 Features
+## Key Features
 
-- **Dashboard Overview**: Real-time visualization of network slice performance
-- **Slice Management**: Create, update, and manage 5G network slices (eMBB, URLLC, mMTC, V2X, IoT)
-- **Device Monitoring**: Track connected devices and their status
-- **Performance Analytics**: Historical and real-time metrics visualization
-- **Alert System**: Configurable alerts for network events and thresholds
-- **User Management**: Role-based access control (RBAC)
-- **API-First**: RESTful API for integration with other systems
+### Multi-Portal Architecture
+- **Client Portal**: For end-users to monitor their slice performance
+- **Vendor Portal**: For service providers to manage their network resources
+- **Admin Panel**: Complete system administration and monitoring
+
+### Core Functionality
+- **5G Network Simulation**: Realistic mmWave simulation using ns-3
+- **Real-time Monitoring**: Live KPI tracking for network slices
+- **ETL Pipeline**: Efficient data processing and analytics
+- **Metrics Collection**: Comprehensive performance monitoring
+- **Data Validation**: Robust schema validation for simulation data
+- **Compression**: Efficient data storage and transfer
+
+### Technical Highlights
+- **Simulation**: ns-3 with mmWave modules
+- **Backend**: FastAPI with async support
+- **Database**: PostgreSQL with SQLAlchemy ORM
+- **Frontend**: Modern React dashboard
+- **Data Processing**: Python-based ETL pipeline
+- **Observability**: Prometheus metrics and logging
 
 ## 🚀 Quick Start
 
@@ -18,13 +31,15 @@ A comprehensive web-based dashboard for managing and monitoring 5G network slice
 
 - Python 3.9+
 - PostgreSQL 13+ (with asyncpg support)
+- ns-3.37+ with mmWave module
+- Node.js 16+ (for frontend)
 - Git
 
 ### Setup
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/5g-slice-manager.git
+   git clone https://github.com/isiangani1/5g-slice-manager.git
    cd 5g-slice-manager
    ```
 
@@ -67,24 +82,30 @@ A comprehensive web-based dashboard for managing and monitoring 5G network slice
      - **Username:** admin
      - **Password:** admin123
 
-## 🛠 Development
-
-### Project Structure
+## 🛠 Project Structure
 
 ```
 5g-slice-manager/
-├── app/                    # Application package
-│   ├── api/                # API routes
-│   ├── core/               # Core functionality
-│   ├── db/                 # Database models and migrations
-│   ├── services/           # Business logic
-│   └── static/             # Static files
+├── 5g-sim/                 # 5G simulation components
+│   ├── 5g_sim.cc           # Main simulation code
+│   └── datastream_server.py# Data streaming server
+├── app/                    # Backend application
+│   ├── api/                # FastAPI routes
+│   ├── core/               # Core modules
+│   │   ├── config.py       # Configuration
+│   │   ├── metrics.py      # Prometheus metrics
+│   │   ├── validation.py   # Data validation
+│   │   └── compression.py  # Data compression
+│   ├── db/                 # Database models & migrations
+│   └── services/           # Business logic
+├── etl/                    # ETL pipeline
+│   └── worker.py           # Data processing worker
+├── frontend/               # React frontend
 ├── scripts/                # Utility scripts
 ├── tests/                  # Test suite
-├── .env.example            # Example environment variables
-├── pyproject.toml          # Project configuration
-├── requirements.txt        # Production dependencies
-└── requirements-dev.txt    # Development dependencies
+├── .env.example            # Environment variables
+├── requirements.txt        # Python dependencies
+└── README.md               # This file
 ```
 
 ### Development Workflow
@@ -118,21 +139,57 @@ A comprehensive web-based dashboard for managing and monitoring 5G network slice
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql+asyncpg://user:password@localhost:5432/5gslice` | Database connection string |
-| `SECRET_KEY` | `your-secret-key` | Secret key for session encryption |
-| `DEBUG` | `True` | Debug mode |
-| `LOG_LEVEL` | `INFO` | Logging level |
-| `SQL_ECHO` | `False` | Log SQL queries |
+Create a `.env` file in the project root with the following variables:
 
-## 📚 API Documentation
+```env
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/5gslice
+
+# Application
+SECRET_KEY=your-secret-key-here
+DEBUG=True
+LOG_LEVEL=INFO
+
+# Simulation
+SIMULATION_DURATION=20  # seconds
+SIMULATION_INTERVAL=1.0  # seconds
+
+# Metrics
+PROMETHEUS_PORT=8001
+
+# ETL
+ETL_BATCH_SIZE=1000
+ETL_WORKERS=4
+```
+
+## API Documentation
 
 API documentation is available at:
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 
-## 🤝 Contributing
+## Running the Simulation
+
+1. **Build the simulation**
+   ```bash
+   cd 5g-sim
+   ./waf configure --enable-examples
+   ./waf build
+   ```
+
+2. **Start the datastream server**
+   ```bash
+   python datastream_server.py
+   ```
+
+3. **Run the simulation**
+   ```bash
+   ./waf --run "5g_sim"
+   ```
+
+## Contributing
+
+We welcome contributions! Please follow these steps:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -140,17 +197,28 @@ API documentation is available at:
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
+
+- [ns-3 Network Simulator](https://www.nsnam.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [React](https://reactjs.org/)
+- [Prometheus](https://prometheus.io/)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
 
 - Built with [FastAPI](https://fastapi.tiangolo.com/)
 - Database powered by [PostgreSQL](https://www.postgresql.org/) and [SQLAlchemy](https://www.sqlalchemy.org/)
 - Frontend built with [Vue.js](https://vuejs.org/) and [Tailwind CSS](https://tailwindcss.com/)
 
-## ⚙️ Local Development Setup (Recommended)
+## Local Development Setup (Recommended)
 
 ### Prerequisites
 - Python 3.8+
@@ -205,7 +273,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
    python -m scripts.init_db
    ```
 
-## 🏃‍♂️ Running the Application Locally
+## Running the Application Locally
 
 ### Development Mode
 
@@ -235,7 +303,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
    python scripts/test_db.py
    ```
 
-## 🌐 WebSocket API
+## WebSocket API
 
 The application provides a WebSocket endpoint for real-time updates. Clients can connect to `ws://localhost:8000/ws/{client_id}` and subscribe to different channels.
 
@@ -264,7 +332,7 @@ The application provides a WebSocket endpoint for real-time updates. Clients can
 }
 ```
 
-## 📊 Database Schema
+## Database Schema
 
 The application uses the following main tables:
 - `slices` - Network slice configurations
@@ -273,7 +341,7 @@ The application uses the following main tables:
 - `alerts` - System alerts
 - `slice_kpis` - Key performance indicators for slices
 
-## 🔒 Security Considerations
+## Security Considerations
 
 - All database connections use SSL/TLS when connecting to Neon PostgreSQL
 - WebSocket connections are secured with WSS when using HTTPS
@@ -286,7 +354,7 @@ The application uses the following main tables:
 pytest tests/
 ```
 
-## 🐳 Docker Setup (Alternative)
+## Docker Setup (Alternative)
 
 If you prefer using Docker, follow these steps:
 
@@ -324,12 +392,12 @@ pip install gunicorn
 uvicorn main:app --host 0.0.0.0 --port 8050 --workers 4
 ```
 
-## 🌐 WebSocket Endpoints
+## WebSocket Endpoints
 
 - `ws://localhost:8050/ws/{client_id}` - Connect to the WebSocket server
 - `POST /api/broadcast` - Broadcast a message to all connected clients
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 5g-slicing/
@@ -348,7 +416,7 @@ uvicorn main:app --host 0.0.0.0 --port 8050 --workers 4
 └── README.md              # This file
 ```
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a new branch: `git checkout -b feature/your-feature`
@@ -356,7 +424,7 @@ uvicorn main:app --host 0.0.0.0 --port 8050 --workers 4
 4. Push to the branch: `git push origin feature/your-feature`
 5. Submit a pull request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 

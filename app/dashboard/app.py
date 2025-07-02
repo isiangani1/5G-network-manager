@@ -1,13 +1,15 @@
 import os
-from flask import Flask, render_template_string, jsonify, redirect, url_for, request
+from flask import Flask, render_template_string, jsonify, redirect, url_for, request, json
 from datetime import datetime, timedelta
 import random
-import json
 import asyncio
 from functools import wraps
 from typing import Any, Dict, List, Tuple, Optional
 import nest_asyncio
 import hashlib
+
+# Create Flask app
+app = Flask(__name__)
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -248,8 +250,13 @@ def create_app():
     
     return app
 
-# Initialize Flask app
-app = Flask(__name__)
+# App configuration
+app.config.update(
+    SECRET_KEY=os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key'),
+    JSON_AS_ASCII=False,
+    JSON_SORT_KEYS=False,
+    JSONIFY_PRETTYPRINT_REGULAR=True
+)
 
 # Add security headers
 @app.after_request

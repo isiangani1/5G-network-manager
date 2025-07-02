@@ -1,11 +1,16 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.wsgi import WSGIMiddleware
-from fastapi.responses import RedirectResponse
 import uvicorn
+import sys
+from pathlib import Path
 
-# Import the Flask app from app.py
-from app import app as flask_app
+# Add the project root to the Python path
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+
+# Import the Flask app from the dashboard module
+from app.dashboard.app import app as flask_app
 
 # Create FastAPI app
 app = FastAPI(title="5G Network Slice Manager")
