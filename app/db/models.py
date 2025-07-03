@@ -257,11 +257,14 @@ class Slice(Base):
         nullable=False,
         comment="Maximum number of devices allowed in this slice"
     )
-    description: Mapped[Optional[str]] = mapped_column(
-        Text, 
-        nullable=True,
-        comment="Optional description of the slice"
-    )
+    # Temporarily disable description column as it doesn't exist in the database
+    # description: Mapped[Optional[str]] = mapped_column(
+    #     Text, 
+    #     nullable=True,
+    #     default=None,
+    #     server_default=None,
+    #     comment="Optional description of the slice"
+    # )
     tags: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         JSON, 
         nullable=True,
@@ -636,12 +639,6 @@ class SliceKPI(Base):
     connected_devices = Column(Integer, default=0, nullable=False,
                             comment="Number of connected devices")
     
-    # Additional metrics
-    packet_loss = Column(Float, nullable=True,
-                       comment="Average packet loss percentage (0-100)")
-    availability = Column(Float, nullable=True,
-                        comment="Slice availability percentage (0-100)")
-    
     # Foreign key to Slice
     slice_id = Column(String(36), ForeignKey("slices.id", ondelete="CASCADE"),
                     nullable=False, index=True,
@@ -649,10 +646,6 @@ class SliceKPI(Base):
     
     # Relationships
     slice = relationship("Slice", back_populates="kpis")
-    
-    # Additional metadata
-    kpi_metadata = Column(JSON, nullable=True,
-                       comment="Additional KPI data in JSON format")
     
     def __repr__(self) -> str:
         return f"<SliceKPI(id={self.id}, slice_id='{self.slice_id}', timestamp='{self.timestamp}')>"
@@ -663,8 +656,7 @@ class SliceKPI(Base):
         # Define your health check logic here
         if self.latency and self.latency > 100:  # Example threshold
             return False
-        if self.packet_loss and self.packet_loss > 5:  # 5% packet loss
-            return False
+        # Add your health check conditions here
         return True
     
     def to_dict(self) -> dict:
@@ -675,9 +667,6 @@ class SliceKPI(Base):
             "latency": self.latency,
             "throughput": self.throughput,
             "connected_devices": self.connected_devices,
-            "packet_loss": self.packet_loss,
-            "availability": self.availability,
             "slice_id": self.slice_id,
-            "is_healthy": self.is_healthy,
-            "kpi_metadata": self.kpi_metadata or {}
+            "is_healthy": self.is_healthy
         }

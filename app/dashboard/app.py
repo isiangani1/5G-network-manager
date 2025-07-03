@@ -1,4 +1,5 @@
 import os
+import uuid
 from flask import Flask, render_template_string, jsonify, redirect, url_for, request, json
 from datetime import datetime, timedelta
 import random
@@ -77,49 +78,53 @@ async def get_db_session():
 
 # Database access functions
 async def get_slices_from_db() -> List[Dict[str, Any]]:
-    """Retrieve all slices from the database."""
-    session_gen = get_db_session()
-    session = await anext(session_gen)
+    """
+    Retrieve all slices from the database.
+    
+    Returns:
+        List[Dict[str, Any]]: A list of slice dictionaries with their attributes
+    """
     try:
-        print("Fetching slices from database...")  # Debug log
-        # Query only the columns that exist in the database
-        result = await session.execute(
-            select(
-                Slice.id,
-                Slice.name,
-                Slice.status,
-                Slice.created_at,
-                Slice.updated_at
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(
+                    Slice.id,
+                    Slice.name,
+                    Slice.status,
+                    Slice.created_at,
+                    Slice.updated_at,
+                    Slice.max_throughput,
+                    Slice.max_latency,
+                    Slice.max_devices
+                )
+                .order_by(Slice.created_at.desc())
             )
-            .order_by(Slice.created_at.desc())
-        )
-        slices = result.all()
+            slices = result.all()
+            
+            slice_list = []
+            for slice_data in slices:
+                # Get latest KPI for connected devices
+                kpi = await get_latest_kpi(slice_data.id)
+                
+                slice_dict = {
+                    'id': slice_data.id,
+                    'name': slice_data.name,
+                    'status': (slice_data.status or 'active').lower(),
+                    'created_at': slice_data.created_at.isoformat() if slice_data.created_at else '',
+                    'updated_at': slice_data.updated_at.isoformat() if slice_data.updated_at else '',
+                    'description': '',  # Description field is not in the database
+                    'max_throughput': float(slice_data.max_throughput) if hasattr(slice_data, 'max_throughput') else 1000.0,
+                    'max_latency': float(slice_data.max_latency) if hasattr(slice_data, 'max_latency') else 50.0,
+                    'max_devices': int(slice_data.max_devices) if hasattr(slice_data, 'max_devices') else 1000,
+                    'connected_devices': kpi.connected_devices if kpi and hasattr(kpi, 'connected_devices') else 0
+                }
+                slice_list.append(slice_dict)
+            
+            return slice_list
         
-        print(f"Found {len(slices)} slices in database")  # Debug log
-        if slices:
-            print("Sample slice data:", {  # Debug log
-                'id': slices[0].id,
-                'name': slices[0].name,
-                'status': slices[0].status
-            })
-        
-        # Convert to list of dicts with safe attribute access
-        return [{
-            'id': slice.id,
-            'name': slice.name,
-            'type': 'default',  # Default slice type
-            'status': (slice.status or '').lower(),
-            'created_at': slice.created_at.isoformat() if slice.created_at else '',
-            'updated_at': slice.updated_at.isoformat() if slice.updated_at else '',
-            'description': ''  # Default empty description
-        } for slice in slices]
     except Exception as e:
-        print(f"Error in get_slices_from_db: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error in get_slices_from_db: {str(e)}")
         return []
-    finally:
-        await session.close()
 
 async def get_kpis_from_db() -> Dict[str, Any]:
     """Retrieve KPI summary from the database."""
@@ -233,33 +238,28 @@ async def get_activity_from_db(limit: int = 10) -> List[Dict[str, Any]]:
     finally:
         await session.close()
 
-async def get_latest_kpi(slice_id: str) -> Dict[str, Any]:
+async def get_latest_kpi(slice_id: str):
     """Get the latest KPI for a slice."""
-    session_gen = get_db_session()
-    session = await anext(session_gen)
     try:
-        # Try to get the latest KPI for the slice
-        result = await session.execute(
-            select(SliceKPI)
-            .where(SliceKPI.slice_id == slice_id)
-            .order_by(SliceKPI.timestamp.desc())
-            .limit(1)
-        )
-        kpi = result.scalars().first()
-        
-        if kpi:
-            return {
-                'connected_devices': getattr(kpi, 'connected_devices', 0),
-                'throughput': getattr(kpi, 'throughput', 0),
-                'latency': getattr(kpi, 'latency', 0),
-                'timestamp': getattr(kpi, 'timestamp', datetime.utcnow())
-            }
-        return {}
+        async with async_session_factory() as session:
+            try:
+                result = await session.execute(
+                    select(
+                        SliceKPI.latency,
+                        SliceKPI.throughput,
+                        SliceKPI.connected_devices
+                    )
+                    .where(SliceKPI.slice_id == slice_id)
+                    .order_by(SliceKPI.timestamp.desc())
+                    .limit(1)
+                )
+                return result.first()
+            except Exception as e:
+                print(f"Error getting latest KPI for slice {slice_id}: {str(e)}")
+                return None
     except Exception as e:
-        print(f"Error getting latest KPI for slice {slice_id}: {e}")
-        return {}
-    finally:
-        await session.close()
+        print(f"Error in get_latest_kpi for slice {slice_id}: {e}")
+        return None
 
 async def get_throughput_latency_from_db(slice_id: str, hours: int = 24) -> Tuple[List[float], List[float]]:
     """Retrieve throughput and latency data for a slice.
@@ -402,62 +402,123 @@ async def get_db_session():
 def index():
     return redirect(url_for('dashboard'))
 
-@app.route('/api/slices', methods=['POST'])
+@app.route('/api/create-slice', methods=['POST'])
 @async_route
 async def create_slice():
-    """Create a new network slice."""
+    """Handle slice creation from the UI."""
+    session = None
     try:
-        data = request.json
-        print("Received create slice request:", data)  # Debug log
+        print("Create slice endpoint hit")  # Debug log
         
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
+        # Parse request data
+        if request.is_json:
+            data = request.get_json()
+            print(f"Received JSON data: {data}")
+        else:
+            data = request.form.to_dict()
+            print(f"Received form data: {data}")
             
-        required_fields = ['name', 'type']
+        # Validate required fields
+        required_fields = ['name']
         for field in required_fields:
-            if field not in data or not data[field]:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+            if field not in data or not str(data[field]).strip():
+                error_msg = f'Missing required field: {field}'
+                print(f"Validation error: {error_msg}")
+                if request.is_json:
+                    return jsonify({'error': error_msg}), 400
+                else:
+                    flash(error_msg, 'error')
+                    return redirect(url_for('dashboard'))
         
-        async with get_db_session() as session:
-            try:
-                # Create new slice
-                new_slice = Slice(
-                    name=data['name'],
-                    type=data['type'],
-                    description=data.get('description', ''),
-                    status='active',  # Make sure this matches your database enum
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                session.add(new_slice)
-                await session.flush()  # Flush to get the ID
+        # Log the request data for debugging
+        print(f"Processing create slice request with data: {data}")
+        
+        try:
+            # Get a new database session
+            session = async_session_factory()
+            print("Database session created")
+            
+            # Create new slice with default values if not provided
+            new_slice = Slice(
+                id=str(uuid.uuid4()),
+                name=str(data['name']).strip(),
+                status='Active',  # Capitalized to match template checks
+                max_throughput=float(data.get('max_throughput', 1000.0)),
+                max_latency=float(data.get('max_latency', 50.0)),
+                max_devices=int(data.get('max_devices', 1000)),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            print(f"Created new slice object: {new_slice.__dict__}")
+            
+            # Add the new slice to the session
+            session.add(new_slice)
+            print("Added slice to session")
+            
+            # Create initial KPI entry with only fields that exist in the database
+            new_kpi = SliceKPI(
+                id=int(uuid.uuid4().int & (1<<31)-1),  # Convert to integer for the ID
+                slice_id=new_slice.id,
+                timestamp=datetime.utcnow(),
+                latency=0.0,
+                throughput=0.0,
+                connected_devices=0
+            )
+            session.add(new_kpi)
+            print("Added KPI to session")
+            
+            # Commit the transaction
+            await session.commit()
+            print(f"Successfully committed transaction. New slice ID: {new_slice.id}")
+            
+            # Return success response
+            response_data = {
+                'message': 'Slice created successfully',
+                'slice_id': new_slice.id
+            }
+            print(f"Returning success response: {response_data}")
+            
+            if request.is_json:
+                return jsonify(response_data), 201
+            else:
+                flash('Slice created successfully!', 'success')
+                return redirect(url_for('dashboard'))
                 
-                # Create initial KPI entry
-                kpi = SliceKPI(
-                    slice_id=new_slice.id,
-                    timestamp=datetime.utcnow(),
-                    latency=random.uniform(5, 50),  # Random initial values
-                    throughput=random.uniform(100, 1000),
-                    connected_devices=random.randint(1, 100)
-                )
-                session.add(kpi)
-                
-                await session.commit()
-                print(f"Successfully created slice: {new_slice.id}")  # Debug log
-                
-                return jsonify({
-                    'message': 'Slice created successfully',
-                    'id': new_slice.id
-                }), 201
-                
-            except Exception as e:
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")
+            if session:
                 await session.rollback()
-                print(f"Database error creating slice: {e}")  # Debug log
-                return jsonify({'error': 'Failed to create slice in database'}), 500
-                
+                print("Rolled back transaction due to error")
+            raise db_error
+            
     except Exception as e:
-        print(f"Error in create_slice endpoint: {e}")  # Debug log
-        return jsonify({'error': 'Internal server error'}), 500
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error in create_slice: {str(e)}\n{error_trace}")
+        
+        if session:
+            try:
+                await session.rollback()
+                print("Rolled back transaction")
+            except Exception as rollback_error:
+                print(f"Error during rollback: {str(rollback_error)}")
+        
+        error_details = str(e)
+        print(f"Returning error response: {error_details}")
+        
+        if request.is_json:
+            return jsonify({
+                'error': 'Failed to create slice',
+                'details': error_details,
+                'trace': error_trace if app.debug else None
+            }), 500
+        else:
+            flash(f'Failed to create slice: {error_details}', 'error')
+            return redirect(url_for('dashboard'))
+    finally:
+        # Ensure session is properly closed
+        if session:
+            await session.close()
 
 @app.route('/dashboard')
 @async_route
@@ -1102,27 +1163,32 @@ async def dashboard():
                     <div class="modal-body">
                         <form id="createSliceForm">
                             <div class="mb-3">
-                                <label for="sliceName" class="form-label">Slice Name</label>
+                                <label for="sliceName" class="form-label">Slice Name <span class="text-danger">*</span></label>
                                 <input type="text" class="form-control" id="sliceName" required>
                             </div>
                             <div class="mb-3">
-                                <label for="sliceType" class="form-label">Slice Type</label>
-                                <select class="form-select" id="sliceType" required>
-                                    <option value="">Select a type</option>
-                                    <option value="eMBB">eMBB (Enhanced Mobile Broadband)</option>
-                                    <option value="URLLC">URLLC (Ultra-Reliable Low-Latency)</option>
-                                    <option value="mMTC">mMTC (Massive Machine Type)</option>
-                                </select>
-                            </div>
-                            <div class="mb-3">
                                 <label for="sliceDescription" class="form-label">Description</label>
-                                <textarea class="form-control" id="sliceDescription" rows="3"></textarea>
+                                <textarea class="form-control" id="sliceDescription" rows="3" placeholder="Optional description for the slice"></textarea>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label for="maxThroughput" class="form-label">Max Throughput (Mbps)</label>
+                                    <input type="number" class="form-control" id="maxThroughput" value="1000.0" min="1" step="0.1">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="maxLatency" class="form-label">Max Latency (ms)</label>
+                                    <input type="number" class="form-control" id="maxLatency" value="50.0" min="1" step="0.1">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="maxDevices" class="form-label">Max Devices</label>
+                                    <input type="number" class="form-control" id="maxDevices" value="1000" min="1">
+                                </div>
                             </div>
                         </form>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" id="confirmCreateSlice">Create Slice</button>
+                        <button type="button" class="btn btn-primary" id="confirmCreateSlice">Create New Slice</button>
                     </div>
                 </div>
             </div>
@@ -1148,7 +1214,7 @@ async def dashboard():
                             </div>
                             <div class="d-flex align-items-center">
                                 <i class="bi bi-telephone-fill me-2" title="Phone"></i>
-                                <a href="tel:+245799319387" class="text-muted text-decoration-none">+245 799 319387</a>
+                                <a href="tel:+254799319387" class="text-muted text-decoration-none">+254 799 319 387</a>
                             </div>
                         </div>
                     </div>
@@ -1159,12 +1225,12 @@ async def dashboard():
         <!-- Toast Notification -->
         <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
             <div id="successToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-                <div class="toast-header bg-success text-white">
-                    <strong class="me-auto">Success</strong>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+                <div class="toast-header">
+                    <strong class="me-auto toast-title">Notification</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
                 </div>
-                <div class="toast-body">
-                    <i class="bi bi-check-circle-fill me-2"></i>
+                <div class="toast-body d-flex align-items-center">
+                    <i class="bi me-2 toast-icon"></i>
                     <span id="toastMessage">Slice created successfully!</span>
                 </div>
             </div>
@@ -1183,10 +1249,13 @@ async def dashboard():
                     new bootstrap.Tooltip(tooltipTriggerEl);
                 });
                 
-                // Initialize toast
+                // Initialize toast with options
                 const toastEl = document.getElementById('successToast');
                 if (toastEl) {
-                    window.successToast = new bootstrap.Toast(toastEl);
+                    window.successToast = new bootstrap.Toast(toastEl, {
+                        autohide: true,
+                        delay: 5000
+                    });
                 }
                 
                 // Initialize charts if the function exists
@@ -1201,57 +1270,206 @@ async def dashboard():
             });
             
             // Handle create slice form submission
-            document.getElementById('confirmCreateSlice').addEventListener('click', async function() {
-                const name = document.getElementById('sliceName').value.trim();
-                const type = document.getElementById('sliceType').value;
-                const description = document.getElementById('sliceDescription').value.trim();
-                const createButton = this;
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('DOM fully loaded, setting up event listeners...');
                 
-                if (!name || !type) {
-                    showToast('Please fill in all required fields', 'warning');
+                const confirmButton = document.getElementById('confirmCreateSlice');
+                const createSliceForm = document.getElementById('createSliceForm');
+                
+                if (confirmButton) {
+                    console.log('Found confirm button, adding click event listener');
+                    confirmButton.addEventListener('click', handleCreateSlice);
+                } else {
+                    console.error('Create slice button not found');
+                }
+                
+                if (createSliceForm) {
+                    console.log('Found create slice form, adding submit event listener');
+                    createSliceForm.addEventListener('submit', function(e) {
+                        e.preventDefault();
+                        handleCreateSlice();
+                    });
+                    
+                    // Debug: Log all form elements
+                    console.log('Form elements:', Array.from(createSliceForm.elements).map(el => ({
+                        id: el.id,
+                        name: el.name,
+                        value: el.value,
+                        type: el.type
+                    })));
+                }
+            });
+            
+            async function handleCreateSlice() {
+                console.log('Create slice function called');
+                const name = document.getElementById('sliceName')?.value.trim();
+                const description = document.getElementById('sliceDescription')?.value.trim();
+                const maxThroughput = parseFloat(document.getElementById('maxThroughput')?.value || '0');
+                const maxLatency = parseFloat(document.getElementById('maxLatency')?.value || '0');
+                const maxDevices = parseInt(document.getElementById('maxDevices')?.value || '0');
+                const createButton = document.getElementById('confirmCreateSlice');
+                
+                console.log('Form values:', { name, description, maxThroughput, maxLatency, maxDevices });
+                
+                // Validate inputs
+                if (!name) {
+                    showToast('Please enter a slice name', 'warning');
                     return;
                 }
 
-                const response = await fetch('/api/create-slice', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
+                if (isNaN(maxThroughput) || maxThroughput <= 0) {
+                    showToast('Please enter a valid maximum throughput', 'warning');
+                    return;
+                }
+
+                if (isNaN(maxLatency) || maxLatency <= 0) {
+                    showToast('Please enter a valid maximum latency', 'warning');
+                    return;
+                }
+
+                if (isNaN(maxDevices) || maxDevices <= 0) {
+                    showToast('Please enter a valid maximum number of devices', 'warning');
+                    return;
+                }
+
+                try {
+                    // Show loading state
+                    createButton.disabled = true;
+                    const originalButtonText = createButton.innerHTML;
+                    createButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Creating...';
+
+                    console.log('Sending request to /api/create-slice with data:', {
                         name,
-                        type,
-                        description
-                    })
-                });
+                        description,
+                        max_throughput: maxThroughput,
+                        max_latency: maxLatency,
+                        max_devices: maxDevices
+                    });
 
-                const result = await response.json();
+                    const response = await fetch('/api/create-slice', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            name,
+                            description,
+                            max_throughput: maxThroughput,
+                            max_latency: maxLatency,
+                            max_devices: maxDevices
+                        })
+                    });
 
-                if (response.ok) {
+                    console.log('Response status:', response.status, response.statusText);
+                    
+                    let result;
+                    try {
+                        const responseText = await response.text();
+                        console.log('Raw response:', responseText);
+                        result = responseText ? JSON.parse(responseText) : {};
+                    } catch (e) {
+                        console.error('Error parsing JSON response:', e);
+                        throw new Error('Invalid response from server');
+                    }
+
+                    if (!response.ok) {
+                        console.error('Server error:', result);
+                        const errorMessage = result.details || result.error || 'Failed to create slice';
+                        throw new Error(errorMessage);
+                    }
+
                     // Show success message
                     showToast('Slice created successfully!', 'success');
                     
-                    // Close modal after a short delay
-                    const modal = bootstrap.Modal.getInstance(document.getElementById('createSliceModal'));
-                    modal.hide();
-                    
-                    // Reset form
-                    document.getElementById('createSliceForm').reset();
-                    
-                    // Reload the page after a short delay to show the new slice
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1500);
-                } else {
-                    showToast(result.error || 'Failed to create slice', 'danger');
+                    // Close modal
+                    const modalEl = document.getElementById('createSliceModal');
+                    if (modalEl) {
+                        const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+                        modal.hide();
+                        
+                        // Reset form after modal is hidden
+                        modalEl.addEventListener('hidden.bs.modal', function onModalHidden() {
+                            const form = document.getElementById('createSliceForm');
+                            if (form) form.reset();
+                            modalEl.removeEventListener('hidden.bs.modal', onModalHidden);
+                            
+                            // Reload the page to show the new slice
+                            window.location.reload();
+                        }, { once: true });
+                    } else {
+                        // If modal can't be found, just reload after a short delay
+                        const form = document.getElementById('createSliceForm');
+                        if (form) form.reset();
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1000);
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    showToast(error.message || 'An error occurred while creating the slice', 'danger');
+                } finally {
+                    // Reset button state
+                    if (createButton) {
+                        createButton.disabled = false;
+                        createButton.innerHTML = originalButtonText;
+                    }
                 }
-            });
-
-            function showToast(message, type) {
-                const toastMessage = document.getElementById('toastMessage');
-                toastMessage.textContent = message;
-                successToast.show();
             }
-                })();
+
+            function showToast(message, type = 'info') {
+                const toastEl = document.getElementById('successToast');
+                if (!toastEl) {
+                    console.error('Toast element not found');
+                    return;
+                }
+                
+                // Update toast content
+                const toastTitle = toastEl.querySelector('.toast-title');
+                const toastMessage = toastEl.querySelector('#toastMessage');
+                const toastIcon = toastEl.querySelector('.toast-icon');
+                
+                // Set title and message
+                const titleMap = {
+                    'success': 'Success',
+                    'warning': 'Warning',
+                    'danger': 'Error',
+                    'info': 'Info'
+                };
+                
+                const iconMap = {
+                    'success': 'bi-check-circle-fill',
+                    'warning': 'bi-exclamation-triangle-fill',
+                    'danger': 'bi-x-circle-fill',
+                    'info': 'bi-info-circle-fill'
+                };
+                
+                // Update title and icon
+                toastTitle.textContent = titleMap[type] || 'Notification';
+                
+                // Reset and set icon class
+                toastIcon.className = 'bi me-2 toast-icon ' + (iconMap[type] || 'bi-info-circle-fill');
+                
+                // Update message
+                toastMessage.textContent = message;
+                
+                // Update header color
+                const toastHeader = toastEl.querySelector('.toast-header');
+                toastHeader.className = `toast-header bg-${type} text-white`;
+                
+                // Show the toast
+                const toast = bootstrap.Toast.getInstance(toastEl) || new bootstrap.Toast(toastEl, {
+                    autohide: true,
+                    delay: 5000
+                });
+                toast.show();
+                
+                // Auto-hide after delay
+                setTimeout(() => {
+                    toast.hide();
+                }, 5000);
+            }
             </script>
             <script>
             // Initialize tooltips
@@ -1649,6 +1867,8 @@ app.jinja_env.filters['md5'] = md5_hash
 def to_json(value):
     """Convert value to JSON."""
     return json.dumps(value, indent=2)
+
+
 
 # Run directly with: python app.py
 if __name__ == '__main__':
