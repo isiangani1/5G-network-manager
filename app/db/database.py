@@ -86,6 +86,33 @@ async_session_factory = async_sessionmaker(
     future=True
 )
 
+# Create a simple session getter that returns a new session
+@asynccontextmanager
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get a new database session as an async context manager.
+    
+    Yields:
+        AsyncSession: A new async database session
+        
+    Example:
+        async with get_db_session() as session:
+            result = await session.execute(select(User))
+            users = result.scalars().all()
+    """
+    session = async_session_factory()
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Database error in session: {e}")
+        raise
+    finally:
+        await session.close()
+
+# Alias for backward compatibility
+get_db = get_db_session
+
 # Create sync session factory
 SessionLocal = sessionmaker(
     bind=sync_engine,
@@ -99,61 +126,8 @@ SessionLocal = sessionmaker(
 from sqlalchemy.ext.declarative import declarative_base
 Base = declarative_base()
 
-# Async database session dependency
-@asynccontextmanager
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Dependency that provides an async database session with robust error handling.
-    
-    Yields:
-        AsyncSession: An async database session
-        
-    Raises:
-        SQLAlchemyError: If there's an error creating or using the session
-        
-    Example:
-        ```python
-        async with get_db() as db:
-            result = await db.execute(select(User))
-            users = result.scalars().all()
-        ```
-    """
-    session = None
-    try:
-        # Create a new session
-        session = async_session_factory()
-        
-        # Test the connection
-        await session.connection()
-        
-        # Yield the session to the caller
-        yield session
-        
-        # Commit the transaction if no exceptions occurred
-        await session.commit()
-        
-    except SQLAlchemyError as e:
-        # Log the error and roll back the transaction
-        logger.error(f"Database error: {e}")
-        if session:
-            await session.rollback()
-        raise
-        
-    except Exception as e:
-        # Log any other exceptions
-        logger.error(f"Unexpected error in database session: {e}")
-        if session:
-            await session.rollback()
-        raise
-        
-    finally:
-        # Always close the session
-        if session:
-            try:
-                await session.close()
-            except Exception as e:
-                logger.error(f"Error closing database session: {e}")
-        await session.close()
+# Alias for backward compatibility
+get_db = get_db_session
 
 # Sync database session (for migrations, etc.)
 @asynccontextmanager

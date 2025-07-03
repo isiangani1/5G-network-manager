@@ -379,12 +379,6 @@ class Device(Base):
         cascade="all, delete-orphan",
         passive_deletes=True
     )
-    alerts: Mapped[List["Alert"]] = relationship(
-        "Alert", 
-        back_populates="device",
-        cascade="all, delete-orphan",
-        passive_deletes=True
-    )
     owner: Mapped[Optional["User"]] = relationship("User", back_populates="devices")
     
     def __repr__(self) -> str:
@@ -578,13 +572,6 @@ class Alert(Base):
         index=True,
         comment="User who owns or is responsible for this alert"
     )
-    device_id: Mapped[Optional[str]] = mapped_column(
-        String(36), 
-        ForeignKey("devices.id", ondelete="CASCADE"),
-        nullable=True, 
-        index=True,
-        comment="Reference to the associated device"
-    )
     context: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         JSON, 
         nullable=True,
@@ -593,7 +580,6 @@ class Alert(Base):
     
     # Relationships
     owner: Mapped[Optional["User"]] = relationship("User", back_populates="alerts")
-    device: Mapped[Optional["Device"]] = relationship("Device", back_populates="alerts")
     
     def __repr__(self):
         return f"<Alert(id={self.id}, level={self.level}, message={self.message[:50]}...)>"
